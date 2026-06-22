@@ -1,0 +1,12 @@
+[package]
+name = "agent-proto"
+version = "0.1.0"
+edition = "2024"
+description = "Shared wire-protocol types between Agent-OS kernel and user-space"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[features]
+default = []
