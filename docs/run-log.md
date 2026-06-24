@@ -25,7 +25,7 @@
 | 2 | `agent_demo_coexist` | 一验收第 3 条 | ✅ PASS | **普通进程 + Agent 进程并存** |
 | 3 | `agent_demo_tool` | 二 | ✅ PASS | 5 工具 + send_message 自循环 |
 | 4 | `agent_demo_path` | 三 | ✅ PASS | LRU 淘汰 20→5 |
-| 5 | `agent_demo_file` | 四 | ✅ PASS | 含 indexed vs full-scan benchmark |
+| 5 | `agent_demo_file` | 四 | ✅ PASS | 规模化 benchmark：N=10000 索引比全扫快 ~113× |
 | 6 | `agent_demo_loop` | 五（**真休眠**）| ✅ PASS | 5hb + 1msg + 6 iters |
 | 7 | `agent_demo_npc` | 六 | ✅ PASS | 3 NPC 互发消息 + 动态拓扑 |
 
@@ -134,19 +134,29 @@
 [demo]   agent_demo_file   (owner=Some("Agent-B"), tags=["demo", "task-4"], preview='queries files by tag and content keyword')
 [demo] tag=demo AND owner=Agent-A -> 2 files
 [demo] keyword='tool' -> 1 files
-[demo] === benchmark: indexed vs full-scan ===
-[demo] indexed:   200 iters in 11 ms (avg 55 us)
-[demo] full-scan: 200 iters in 10 ms (avg 50 us)
-[demo] WARN: index isn't faster -- baseline file set is tiny;
-[demo]       in production scale, indexed path scales O(1) per filter.
+[demo] STEP 5/5: scaling benchmark (kernel-internal timing, excludes syscall cost)
+[demo]   workload: N files w/ tag=bg owner=Agent-Bg, few hits tag=needle AND owner=Agent-Hit
+[demo]   query repeated 200x per N; lower ns = faster
+[demo]         N |    full-scan(ns) |      indexed(ns) |      speedup
+[demo]   --------+------------------+------------------+-------------
+[demo]        10 |          1083760 |          1391360 |         0.77x
+[demo]       100 |          1141120 |          1308080 |         0.88x
+[demo]      1000 |          4557360 |          1338080 |         3.40x
+[demo]      5000 |         79741040 |          1004640 |        79.37x
+[demo]     10000 |        114163200 |          1006320 |       113.44x
+[demo]   -> full-scan grows with N (O(N)); indexed stays ~flat (O(hits)).
+[demo]   -> CONCLUSION: inverted index outperforms full traversal at scale.
 [demo] PASS task-4
 ```
 
-**关键证据**：
+**关键证据**（regenerated 2026-06-24，新增规模化 benchmark）：
 
 - 三种过滤维度都正确：tag、tag+owner、keyword
-- benchmark 持平（11 ms vs 10 ms） —— 这正是 perf-report §3.4 预测的小数据集（N=4）下的行为
-- 程序自检识别出"index isn't faster"并主动打印 WARN —— **答辩亮点**：你的代码能识别自己的局限
+- **规模化对比数据**（通过 `sys_file_attr_bench` #540 在内核内计时，排除 syscall/序列化开销）：
+  - **倒排索引耗时基本恒定**：N 从 10→10000，indexed 始终 ~1.0–1.4M ns（200 次查询），即 O(命中数)、与 N 无关
+  - **全量扫描随 N 近似线性增长**：1.08M → 1.14M → 4.56M → 79.7M → 114M ns
+  - **N=10000 时索引快 ~113×** —— 这就是要求文档任务四验收第 2 条"查询性能优于遍历所有文件逐一检查（提供对比数据）"的字面证据
+- 小 N（10/100）时索引略慢（0.77×/0.88×）是真实且可解释的：索引路径有固定开销（克隆候选集、构造 owner key、求交集分配），在几十个文件时还不划算，N≥1000 后优势迅速拉开——**完整展示了索引的适用规模与交叉点**
 
 ## 任务五：`agent_demo_loop`（**真休眠版本**）
 

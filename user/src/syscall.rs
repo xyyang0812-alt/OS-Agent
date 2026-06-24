@@ -31,6 +31,7 @@ const SYSCALL_AGENT_SET_LOOP_STATE: usize = 536;
 const SYSCALL_FILE_ATTR_DEL: usize = 537;
 const SYSCALL_FILE_ATTR_SET: usize = 538;
 const SYSCALL_AGENT_SET_PRIORITY: usize = 539;
+const SYSCALL_FILE_ATTR_BENCH: usize = 540;
 
 fn syscall(id: usize, args: [usize; 3]) -> isize {
     let mut ret: isize;
@@ -231,4 +232,8 @@ pub fn sys_file_attr_del(
 
 pub fn sys_agent_set_priority(priority: usize) -> isize {
     syscall(SYSCALL_AGENT_SET_PRIORITY, [priority, 0, 0])
+}
+
+pub fn sys_file_attr_bench(n: usize, iters: usize, use_index: usize) -> isize {
+    syscall(SYSCALL_FILE_ATTR_BENCH, [n, iters, use_index])
 }

@@ -342,6 +342,13 @@ pub fn agent_set_priority(priority: usize) -> isize {
     sys_agent_set_priority(priority)
 }
 
+/// 任务四性能基准：在 `n` 个文件上把同一组合查询重复 `iters` 次，返回**总耗时(纳秒)**。
+/// `use_index=true` 走倒排索引，`false` 走全量扫描。计时在内核内完成，
+/// 不含 syscall 往返与序列化开销，能真实反映"索引 vs 遍历"的复杂度差异。
+pub fn file_attr_bench(n: usize, iters: usize, use_index: bool) -> isize {
+    sys_file_attr_bench(n, iters, if use_index { 1 } else { 0 })
+}
+
 /// 从 Path Buffer 直接读取某节点（零拷贝）
 ///
 /// 返回 `(req_bytes, resp_bytes)` 引用——这些数据驻留在用户共享内存里。

@@ -639,6 +639,19 @@ pub fn sys_file_attr_del(
     }
 }
 
+/// sys_file_attr_bench (#540) — 任务四性能验收：内核内基准
+///
+/// 在独立局部属性表上构造 `n` 个文件（少数命中目标条件），把同一组合查询
+/// （tag + owner）重复 `iters` 次，分别测倒排索引 / 全量扫描的耗时。整个
+/// 计时在内核内完成，**排除 syscall 往返与 postcard 序列化开销**，从而真实
+/// 反映"索引 O(命中) vs 全扫 O(N)"的复杂度差异。
+///
+/// 参数：`n` 文件总数；`iters` 查询重复次数；`use_index` 非 0 走索引、0 走全扫。
+/// 返回：该查询 `iters` 次的总耗时（纳秒）。
+pub fn sys_file_attr_bench(n: usize, iters: usize, use_index: usize) -> isize {
+    crate::agent::file_attr::run_benchmark(n, iters, use_index != 0) as isize
+}
+
 /// sys_mailbox_recv (#535)  — 任务五附加：取走邮箱里的一条消息
 ///
 /// 与 `read_user_bytes` 写出协议帧不同，邮箱消息直接当作 raw bytes 写入用户缓冲。

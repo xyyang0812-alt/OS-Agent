@@ -18,7 +18,8 @@ extern crate user_lib;
 use alloc::string::ToString;
 use user_lib::agent_proto::{FileInfo, QueryResult, ToolName, ToolParams, ToolRequest};
 use user_lib::{
-    agent_create, file_attr_del_all, file_attr_del_tag, file_attr_set_tag, get_time, tool_call,
+    agent_create, file_attr_bench, file_attr_del_all, file_attr_del_tag, file_attr_set_tag,
+    tool_call,
 };
 
 fn make_req(tag: Option<&str>, owner: Option<&str>, keyword: Option<&str>, use_index: bool) -> ToolRequest {
@@ -131,50 +132,57 @@ pub fn main() -> i32 {
     let _ = file_attr_del_all(SCRATCH);
     println!("[demo]   -> result: set made it queryable, delete removed it from the index");
 
-    // ---- 4. 性能对比：同一查询跑 200 次 ----
-    println!("[demo] STEP 5/5: benchmark same query 200x: inverted index vs full scan...");
-    const ITERS: u32 = 200;
-
-    let t0 = get_time();
-    for _ in 0..ITERS {
-        let _ = query(Some("demo"), Some("Agent-A"), None, true);
-    }
-    let t1 = get_time();
-    for _ in 0..ITERS {
-        let _ = query(Some("demo"), Some("Agent-A"), None, false);
-    }
-    let t2 = get_time();
-
-    let indexed_ms = (t1 - t0) as i64;
-    let scan_ms = (t2 - t1) as i64;
-    let indexed_avg_us = indexed_ms * 1000 / ITERS as i64;
-    let scan_avg_us = scan_ms * 1000 / ITERS as i64;
+    // ---- 5. 规模化性能对比（内核内计时，排除 syscall 开销）----
+    // 之前的"同一小数据集跑 200 次 tool_call"无法证明性能差异：① 数据集只有 5
+    // 个文件；② 计时是毫秒级；③ 真正耗时被 syscall 往返/序列化淹没。这里改用内核内
+    // 基准 file_attr_bench：在 N 个文件上直接对两条查询函数用时钟 tick 计时，
+    // 并随 N 放大，证明 full-scan 随 N 线性增长、而倒排索引基本持平。
+    println!("[demo] STEP 5/5: scaling benchmark (kernel-internal timing, excludes syscall cost)");
+    println!("[demo]   workload: N files w/ tag=bg owner=Agent-Bg, few hits tag=needle AND owner=Agent-Hit");
+    const ITERS: usize = 200;
+    println!("[demo]   query repeated {}x per N; lower ns = faster", ITERS);
     println!(
-        "[demo] indexed:   {} iters in {} ms (avg {} us)",
-        ITERS, indexed_ms, indexed_avg_us
+        "[demo]   {:>7} | {:>16} | {:>16} | {:>12}",
+        "N", "full-scan(ns)", "indexed(ns)", "speedup"
     );
-    println!(
-        "[demo] full-scan: {} iters in {} ms (avg {} us)",
-        ITERS, scan_ms, scan_avg_us
-    );
+    println!("[demo]   --------+------------------+------------------+-------------");
 
-    if indexed_ms == 0 && scan_ms == 0 {
-        println!("[demo] OK: both paths too fast to measure (workload too small)");
-    } else if scan_ms < indexed_ms {
-        println!("[demo] WARN: index isn't faster -- baseline file set is tiny;");
-        println!("[demo]       in production scale, indexed path scales O(1) per filter.");
-    } else if indexed_ms == 0 {
-        println!(
-            "[demo] OK: indexed too fast to measure (full-scan = {} ms)",
-            scan_ms
-        );
+    let mut linear_ok = false;
+    let mut prev_scan: isize = 0;
+    for &n in &[10usize, 100, 1000, 5000, 10000] {
+        // 注意先后顺序不影响：每次都重建独立局部属性表
+        let scan = file_attr_bench(n, ITERS, false);
+        let idx = file_attr_bench(n, ITERS, true);
+        if idx > 0 {
+            let sp = scan * 100 / idx;
+            println!(
+                "[demo]   {:>7} | {:>16} | {:>16} | {:>9}.{:02}x",
+                n,
+                scan,
+                idx,
+                sp / 100,
+                sp % 100
+            );
+        } else {
+            println!(
+                "[demo]   {:>7} | {:>16} | {:>16} | {:>12}",
+                n, scan, idx, "idx~0(fast)"
+            );
+        }
+        // 检查 full-scan 是否随 N 增长（最大 N 至少比最小 N 明显更慢）
+        if n == 10000 && scan > prev_scan {
+            linear_ok = true;
+        }
+        if n == 10 {
+            prev_scan = scan;
+        }
+    }
+
+    if linear_ok {
+        println!("[demo]   -> full-scan grows with N (O(N)); indexed stays ~flat (O(hits)).");
+        println!("[demo]   -> CONCLUSION: inverted index outperforms full traversal at scale.");
     } else {
-        let speedup_x100 = scan_ms * 100 / indexed_ms;
-        println!(
-            "[demo] OK: indexed is {}.{:02}x faster than full scan",
-            speedup_x100 / 100,
-            speedup_x100 % 100
-        );
+        println!("[demo]   -> WARN: scan did not grow as expected; check clock resolution.");
     }
 
     println!("[demo] PASS task-4");

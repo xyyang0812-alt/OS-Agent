@@ -24,6 +24,7 @@
 | 537 | `sys_file_attr_del` | 4 | `fn(name: *const u8, name_len: usize, tag: *const u8, tag_len: usize) -> isize` `tag_len==0` 删整个文件属性；返回 1=删掉/0=不存在 |
 | 538 | `sys_file_attr_set` | 4 | `fn(name: *const u8, name_len: usize, tag: *const u8, tag_len: usize) -> isize` 给文件设置一个标签 |
 | 539 | `sys_agent_set_priority` | 5 | `fn(priority: usize) -> isize` 设置当前任务调度优先级（钳到 255），返回设置后的值 |
+| 540 | `sys_file_attr_bench` | 4 | `fn(n: usize, iters: usize, use_index: usize) -> isize` 内核内性能基准：在独立局部属性表上构造 `n` 个文件，把同一组合查询重复 `iters` 次，`use_index!=0` 走倒排索引、否则走全量扫描，返回总耗时（纳秒）。计时排除 syscall/序列化开销，用于"索引 vs 遍历"的对比验收 |
 
 `sys_agent_info` 返回的 `AgentInfo` 布局（16 字节小端）：
 

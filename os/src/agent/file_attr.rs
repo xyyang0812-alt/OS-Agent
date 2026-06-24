@@ -282,3 +282,71 @@ pub fn init_demo_attrs() {
     s.set_owner("user_shell", "Kernel");
     s.set_digest("user_shell", b"interactive shell entry");
 }
+
+/// 任务四性能验收：**内核内基准测试**。
+///
+/// 为什么单独写一个内核内基准，而不是在用户态循环调用 `tool_call`？
+/// 因为用户态每次查询都要陷入内核 + postcard 序列化/反序列化，这部分固定
+/// 开销远大于"几条属性匹配"本身，会把"索引 vs 全扫"的真实差距完全淹没。
+/// 这里在一个**独立的局部属性表**上直接调用两条查询函数并用时钟 tick 计时，
+/// 排除了 syscall 与序列化开销，能真实反映复杂度差异：
+///
+/// - `query_indexed`：倒排索引取候选 + 求交集，约 O(命中数)，与 N 基本无关
+/// - `query_full_scan`：逐文件匹配，O(N)
+///
+/// 数据集构造：`n` 个文件作为背景噪声（tag=`bg`, owner=`Agent-Bg`），其中少数
+/// 命中目标条件（tag=`needle` AND owner=`Agent-Hit`），模拟"大海捞针"——这正是
+/// 索引相对全扫的优势场景。
+///
+/// 参数：`n` 文件总数；`iters` 同一查询重复次数；`use_index` 选择查询路径。
+/// 返回：该查询重复 `iters` 次的**总耗时（纳秒）**。
+pub fn run_benchmark(n: usize, iters: usize, use_index: bool) -> usize {
+    let mut s = FileAttrStore::new();
+    let hits = if n >= 8 { 4 } else { n.min(1) };
+
+    // O(N) 直接构造：基准里文件名天然唯一，绕过 add_tag/set_owner 的去重扫描
+    // （那两个接口每次插入都 `.any()` 扫一遍索引向量，批量造 N 个文件会退化成
+    // O(N²)，纯属构造开销，不应计入也不该拖慢基准）。
+    let mut bg_names: Vec<String> = Vec::new();
+    let mut needle_names: Vec<String> = Vec::new();
+    for i in 0..n {
+        let name = alloc::format!("bench_file_{}", i);
+        let mut attrs = FileAttrs::default();
+        if i < hits {
+            // 针：命中目标条件
+            attrs.tags.push("needle".to_string());
+            attrs.kv.insert("owner".to_string(), "Agent-Hit".to_string());
+            needle_names.push(name.clone());
+        } else {
+            // 背景噪声
+            attrs.tags.push("bg".to_string());
+            attrs.kv.insert("owner".to_string(), "Agent-Bg".to_string());
+            bg_names.push(name.clone());
+        }
+        s.by_name.insert(name, attrs);
+    }
+    // 一次性灌入倒排索引
+    s.index_tag.insert("bg".to_string(), bg_names.clone());
+    s.index_tag.insert("needle".to_string(), needle_names.clone());
+    s.index_kv
+        .insert(("owner".to_string(), "Agent-Bg".to_string()), bg_names);
+    s.index_kv
+        .insert(("owner".to_string(), "Agent-Hit".to_string()), needle_names);
+
+    let start = crate::timer::get_time();
+    let mut acc: usize = 0;
+    for _ in 0..iters {
+        let r = if use_index {
+            s.query_indexed(Some("needle"), Some("Agent-Hit"), None)
+        } else {
+            s.query_full_scan(Some("needle"), Some("Agent-Hit"), None)
+        };
+        // black_box 防止编译器把"结果未被使用"的查询整体优化掉
+        acc = acc.wrapping_add(core::hint::black_box(r.len()));
+    }
+    let elapsed_ticks = crate::timer::get_time() - start;
+    let _ = core::hint::black_box(acc);
+
+    // tick -> 纳秒：ticks * 1e9 / CLOCK_FREQ（usize=64bit，不会溢出）
+    elapsed_ticks * 1_000_000_000 / crate::config::CLOCK_FREQ
+}

@@ -40,6 +40,7 @@ const SYSCALL_AGENT_SET_LOOP_STATE: usize = 536;
 const SYSCALL_FILE_ATTR_DEL: usize = 537;
 const SYSCALL_FILE_ATTR_SET: usize = 538;
 const SYSCALL_AGENT_SET_PRIORITY: usize = 539;
+const SYSCALL_FILE_ATTR_BENCH: usize = 540;
 
 mod agent;
 mod fs;
@@ -84,6 +85,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_FILE_ATTR_DEL => sys_file_attr_del(args[0], args[1], args[2], args[3]),
         SYSCALL_FILE_ATTR_SET => sys_file_attr_set(args[0], args[1], args[2], args[3]),
         SYSCALL_AGENT_SET_PRIORITY => sys_agent_set_priority(args[0]),
+        SYSCALL_FILE_ATTR_BENCH => sys_file_attr_bench(args[0], args[1], args[2]),
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
     }
 }
