@@ -27,6 +27,8 @@ const DEMOS: &[&str] = &[
     "agent_demo_path\0",
     "agent_demo_file\0",
     "agent_demo_loop\0",
+    "agent_demo_fileevent\0",
+    "agent_demo_priority\0",
     "agent_demo_npc\0",
 ];
 

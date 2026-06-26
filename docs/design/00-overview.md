@@ -18,7 +18,7 @@
   - 内核管"机制"：调度、配额、安全边界、淘汰策略的实现
   - 用户态管"策略"：缓存什么、淘汰哪个、如何组织数据
 - **零拷贝优先**：能放共享内存的数据不走 syscall
-- **零侵入**：所有 Agent 新代码集中在 `os/src/agent/` 与 `os/src/fs/attr.rs`，原内核代码改动最小化
+- **零侵入**：所有 Agent 新代码集中在 `os/src/agent/`（含旁路文件属性表 `file_attr.rs`，不改 easy-fs 磁盘布局），原内核代码改动最小化
 - **强类型协议**：用 Rust 类型系统约束 Tool 调用，编译期捕获大量错误
 - **可演进**：协议带版本号，新工具可热插拔注册
 
@@ -84,11 +84,11 @@ Agent Context 区被进一步切分为：
 
 | 既有结构 | 改动 |
 |---|---|
-| `task::TaskControlBlockInner` | 新增 `agent_ext: Option<Box<AgentExt>>`（普通进程为 `None`，零开销） |
-| `mm::MemorySet` | 新增 `map_agent_context(&mut self, size: usize)` 方法 |
-| `syscall::syscall()` | 新增 syscall 号 500~534 的分发 |
-| `fs::inode::OSInode` | 新增 `attrs: BTreeMap<String, Vec<u8>>` 字段 |
-| `task::manager` | 增加 Agent 专用就绪队列（任务五用） |
+| `task::TaskControlBlockInner` | 新增 `agent_ext: Option<Box<AgentExt>>`（普通进程为 `None`，零开销）+ `priority` 字段 |
+| `mm::MemorySet` | 新增 Agent Context 区映射方法 |
+| `syscall::syscall()` | 新增 syscall 号 500~540 的分发 |
+| 文件属性 | **旁路全局属性表** `os/src/agent/file_attr.rs`（不侵入 `easy-fs` 磁盘布局），含倒排索引 |
+| `task::manager` | 就绪队列 `fetch` 改为按 `priority` 取最高优先级（任务五 c 优先级调度） |
 
 ## 6. Syscall 总表（含编号）
 

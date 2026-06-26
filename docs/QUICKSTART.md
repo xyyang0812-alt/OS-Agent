@@ -55,15 +55,18 @@ QEMU 启动后会看到 rCore 的 logo，然后进入 shell `>>`。
 >> agent_runner
 ```
 
-按回车后会顺序跑 6 个 demo，每个完成后打印 `<<< [n/6] xxx PASS`。
+按回车后会顺序跑全部 demo，每个完成后打印 `<<< [n/N] xxx PASS`。
 最后看到：
 
 ```
 =============================================
-  SUMMARY: 6 PASS, 0 FAIL (out of 6)
+  SUMMARY: 9 PASS, 0 FAIL (out of 9)
   AGENT-OS ALL DEMOS PASS
 =============================================
 ```
+
+> 注意：`agent_demo_file` 的规模化性能基准（N 最大 10000）在 QEMU 里约需 30–60 秒，
+> 跑 `agent_runner` 时这一步会停顿较久，属正常现象，请耐心等待。
 
 ### 单 demo 调试
 
@@ -71,10 +74,13 @@ QEMU 启动后会看到 rCore 的 logo，然后进入 shell `>>`。
 
 ```
 >> agent_demo_create     # 任务一
+>> agent_demo_coexist    # 任务一验收（共存）
 >> agent_demo_tool       # 任务二
 >> agent_demo_path       # 任务三
->> agent_demo_file       # 任务四（含性能对比）
->> agent_demo_loop       # 任务五（心跳 + 邮箱）
+>> agent_demo_file       # 任务四（含规模化性能对比）
+>> agent_demo_loop       # 任务五（心跳 + 邮箱 + 真休眠）
+>> agent_demo_fileevent  # 任务五b（文件变更事件唤醒）
+>> agent_demo_priority   # 任务五c（优先级调度）
 >> agent_demo_npc        # 任务六（NPC 生态综合演示）
 ```
 
@@ -139,17 +145,19 @@ demo 用户态字节都拿得到。
 | `README.md` | 项目门面 |
 | `docs/design/00-overview.md` | 总览 + mermaid 图 |
 | `docs/design/01-protocol.md` | Tool Call 协议规格 |
-| `docs/design/02-syscall-spec.md` | 14 个新 syscall |
+| `docs/design/02-syscall-spec.md` | 19 个新 syscall（500–540） |
 | `docs/adr/ADR-001-baseline-choice.md` | 为什么选 rCore-ch6 |
 | `docs/adr/ADR-002-protocol-format.md` | 为什么选 postcard |
 | `docs/adr/ADR-003-context-area-layout.md` | Context 区设计 |
 | `docs/pitch.md` | **答辩讲稿**（1min / 5-10min / Q&A） |
-| `docs/perf-report.md` | **性能报告**（待填实测数字） |
+| `docs/perf-report.md` | **性能报告**（含 113× 实测） |
+| `docs/run-log.md` | QEMU 端到端运行记录 |
+| `docs/impl-report-tool-call.md` | 零拷贝工具调用编码报告 |
 | `docs/QUICKSTART.md` | 本文档 |
 | `agent_proto/` | 共享协议 crate |
-| `os/src/agent/` | 内核 Agent-OS 子系统（7 个模块） |
-| `os/src/syscall/agent.rs` | 13 个新 syscall 入口 |
-| `user/src/bin/agent_*` | 7 个 demo 程序 + agent_runner |
+| `os/src/agent/` | 内核 Agent-OS 子系统 |
+| `os/src/syscall/agent.rs` | 19 个新 syscall 入口 |
+| `user/src/bin/agent_*` | 9 个 demo + agent_npc_worker + agent_runner |
 
 ---
 

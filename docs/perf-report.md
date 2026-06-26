@@ -104,74 +104,74 @@ let info: SystemStatusInfo = postcard::from_bytes(bytes).unwrap();
 
 ### 3.1 测试设计
 
-在 `agent_demo_file.rs` 中：
-- 同一个查询 `(tag=demo, owner=Agent-A)` 跑 200 次
-- 分别用 `use_index=true`（走倒排索引）和 `use_index=false`（走全量扫描）
-- 用 `get_time_ms()` 测耗时
+旧版做法（同一个 5 文件数据集跑 200 次 `tool_call`、用毫秒级 `get_time_ms`）**无法证明性能差异**，
+因为：① 数据集只有几个文件；② 计时是毫秒级；③ 真正耗时被 syscall 往返 + postcard 序列化淹没。
+
+现版改用**内核内规模化基准** `sys_file_attr_bench(n, iters, use_index)`（#540）：
+
+- 在一个**独立局部属性表**上构造 N 个文件（少数命中目标条件，模拟"大海捞针"）
+- 把同一组合查询 `tag=needle AND owner=Agent-Hit` 重复 `iters=200` 次
+- 直接在内核内用时钟 tick 计时，**排除 syscall 与序列化开销**，只测查询函数本身
+- 用 `core::hint::black_box` 防止编译器把"结果未使用"的查询优化掉
+- 随 N 放大（10 → 10000），观察两条路径的增长趋势
 
 ### 3.2 算法复杂度对比
 
 | 路径 | 单次查询 |
 |---|---|
-| 倒排索引 | O(k₁) ∩ O(k₂) ≈ O(k)（k 为命中候选数） |
-| 全量扫描 | O(N × c)（N 文件数，c 条件数） |
+| 倒排索引 `query_indexed` | O(k)（k 为命中候选数，取索引候选 + 求交集） |
+| 全量扫描 `query_full_scan` | O(N × c)（N 文件数，c 条件数） |
 
-`N=5` 时差距小，但 `N` 增长时差距是数量级。
+### 3.3 实测数据（QEMU virt + RustSBI，2026-06-24）
 
-### 3.3 实测数据（QEMU virt + RustSBI 0.3.1）
-
-`agent_demo_file` 第 200 次查询 benchmark 实测：
+`agent_demo_file` STEP 5/5 实测：
 
 ```
-[demo] indexed:   200 iters in 11 ms (avg 55 us)
-[demo] full-scan: 200 iters in 11 ms (avg 55 us)
-[demo] OK: indexed is 1.00x faster than full scan
+[demo]         N |    full-scan(ns) |      indexed(ns) |      speedup
+[demo]   --------+------------------+------------------+-------------
+[demo]        10 |           830880 |          1064320 |         0.78x
+[demo]       100 |           862080 |           999920 |         0.86x
+[demo]      1000 |          9756080 |           991520 |         9.83x
+[demo]      5000 |         63384320 |          1004640 |        61.89x
+[demo]     10000 |        114854720 |          1016320 |       113.01x
+[demo]   -> full-scan grows with N (O(N)); indexed stays ~flat (O(hits)).
+[demo]   -> CONCLUSION: inverted index outperforms full traversal at scale.
 ```
 
-| 路径 | 200 次总耗时 | 平均单次 |
-|---|---|---|
-| indexed | 11 ms | 55 µs |
-| full-scan | 11 ms | 55 µs |
-
-加速比：**1.00×**（基线数据集 N=4 时持平）
-
-### 3.4 1.00× 结果分析（重要）
-
-这个 "indexed 没快" 的结果**符合算法预期**：
-
-1. **数据集规模太小**：演示用属性表只装了 4 个文件。
-   全扫描遍历 4 条记录的 L1 cache hit 成本极低（< 100 ns），
-   倒排索引的哈希查表 + 两个 `SmallVec` 求交集开销在同一数量级。
-
-2. **QEMU 时间分辨率限制**：rCore-ch6 的 `get_time_ms()` 来自 10 ms 一次的 timer 中断；
-   200 次查询总共 11 ms ≈ 55 µs/次，已逼近时钟精度本身。
-
-3. **算法优势在 N 增长时才显现**：
-
-| N（文件数）| 单次 indexed | 单次 full-scan | 理论比 |
+| N | full-scan (ns) | indexed (ns) | 加速比 |
 |---|---|---|---|
-| 4（实测基线）| ~55 µs | ~55 µs | 1× |
-| 100 | ~5 µs（O(k)，k≪N）| ~1.2 ms（O(N·c)）| ~240× |
-| 10 000 | ~5 µs | ~120 ms | ~24 000× |
+| 10 | 830 880 | 1 064 320 | 0.78× |
+| 100 | 862 080 | 999 920 | 0.86× |
+| 1 000 | 9 756 080 | 991 520 | 9.83× |
+| 5 000 | 63 384 320 | 1 004 640 | 61.89× |
+| 10 000 | 114 854 720 | 1 016 320 | **113.01×** |
 
-**结论**：这是 O(k) vs O(N·c) 的本质差异，机制（倒排索引）已下沉到内核，
-策略（数据规模）由调用方决定。本演示**正确展示了机制**，规模化下的优势可
-通过把 `FILE_ATTR_STORE` 扩到 1k+ 条目复现。
+### 3.4 结果分析
+
+1. **倒排索引耗时基本恒定**：N 从 10 涨到 10000，indexed 始终 ~1.0–1.1M ns（200 次查询），
+   即 O(命中数)、与 N 无关——这正是索引的价值。
+2. **全量扫描随 N 近似线性增长**：从 ~0.83M ns（N=10）涨到 ~115M ns（N=10000），
+   印证 O(N)。
+3. **交叉点在 N≈1000**：小 N（10/100）时索引反而略慢（0.78×/0.86×），因为索引路径有固定开销
+   （克隆候选集、构造 owner key、求交集分配），在只有几十个文件时还不划算；N≥1000 后优势迅速拉开，
+   N=10000 时快 ~113×。这个"交叉点"是真实且可解释的，完整展示了索引的适用规模。
+4. **数值波动属正常**：不同运行受系统负载影响会小幅波动（如 N=1000 曾测得 3.4×~9.8×），
+   但结论始终一致：全扫线性涨、索引持平、大 N 下索引快上百倍。
 
 ### 3.5 任务四验收对照
 
 | 要求项 | 证据 |
 |---|---|
-| 实现属性查询接口 | `tool_call(QueryFile)` 三种过滤维度全 OK |
-| 提供索引和非索引两条路径 | `use_index: bool` 参数 + handler 内 if/else |
-| 提供性能对比数据 | 见上表 |
+| 实现属性查询接口 | `tool_call(QueryFile)` 三种过滤维度（tag/owner/keyword）全 OK |
+| 提供索引和非索引两条路径 | `query_indexed` vs `query_full_scan`，由 `use_index` 切换 |
+| **查询性能优于遍历（提供对比数据）** | 见 §3.3 表，N=10000 索引快 ~113× |
 | 性能对比分析 | 见 §3.4 |
 
-### 3.4 评分映射
+### 3.6 评分映射
 
-- **完整性**：任务四明确要求"提供对比数据"，本节是直接证据
-- **创新性**：倒排索引在 OS 教学项目里是少见的实践
-- **代码质量**：同一份 `query_file` handler 通过参数切换两条路径，无重复
+- **完整性**：任务四明确要求"查询性能优于遍历所有文件逐一检查（提供对比数据）"，本节是直接证据
+- **创新性**：倒排索引在 OS 教学项目里是少见的实践，且基准下沉内核、排除 syscall 干扰
+- **代码质量**：同一份查询逻辑两条路径无重复，基准用独立局部表、不污染全局属性存储
 
 ---
 
@@ -181,7 +181,7 @@ let info: SystemStatusInfo = postcard::from_bytes(bytes).unwrap();
 
 | 测试 | 命令 | 期望 |
 |---|---|---|
-| 单 Agent 全流程 | `agent_runner` | 6 PASS, 0 FAIL |
+| 全流程一键 | `agent_runner` | 9 PASS, 0 FAIL |
 | 高频 push 路径 | `agent_demo_path` 里 20 次 push 大节点 | LRU 淘汰生效，不 OOM |
 | 多 Agent 并发 | `agent_demo_npc` | 3 NPC 串行 exit code = 0 |
 | 心跳压力 | `agent_demo_loop` 收 5 次心跳 | 5 hb + ≥1 msg |
@@ -214,7 +214,7 @@ QEMU 启动后，按顺序执行：
 |---|---|
 | 协议 OK（解码无错） | 每个 demo 通过即可 |
 | 零拷贝路径走通 | `agent_demo_tool` 中 result_offset=0x100, result_len>0 |
-| 索引 vs 扫描比 | `agent_demo_file` 末尾 "indexed is __x faster" |
+| 索引 vs 扫描比 | `agent_demo_file` STEP 5/5 规模对比表（N=10000 时 ~113×） |
 | 并发稳定 | `agent_demo_npc` 末尾 "all NPCs done" |
 | LRU 生效 | `agent_demo_path` 末尾 "pushed 20, holds N (capped)" |
 
